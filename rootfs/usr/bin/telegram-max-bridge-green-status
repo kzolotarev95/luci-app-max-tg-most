@@ -1,0 +1,52 @@
+#!/bin/sh
+
+main_count() {
+  C=0
+  for P in $(ps w | awk '/\/usr\/bin\/telegram-max-bridge-poll/ && !/awk/ {print $1}'); do
+    PP="$(awk '/^PPid:/ {print $2}' /proc/$P/status 2>/dev/null)"
+    [ "$PP" = "1" ] && C=$((C+1))
+  done
+  echo "$C"
+}
+
+. /usr/lib/telegram-max-bridge/common.sh
+load_tmb_config 2>/dev/null || true
+
+BASE="$(green_base_url 2>/dev/null || true)"
+enabled="$(uci -q get telegram_max_bridge.main.enabled 2>/dev/null || echo 0)"
+poll_enabled="$(uci -q get telegram_max_bridge.main.poll_enabled 2>/dev/null || echo 0)"
+main="$(main_count)"
+
+state="unknown"
+phone="unknown"
+incoming="unknown"
+
+if [ -n "$BASE" ] && [ -n "$max_api_token" ]; then
+  settings="$(curl -sS -m 12 "${BASE}/getSettings/${max_api_token}" 2>/dev/null || true)"
+  phone="$(echo "$settings" | jsonfilter -e '@.wid' 2>/dev/null | head -1)"
+  incoming="$(echo "$settings" | jsonfilter -e '@.incomingWebhook' 2>/dev/null | head -1)"
+  [ -n "$phone" ] || phone="unknown"
+  [ -n "$incoming" ] || incoming="unknown"
+
+  state="$(curl -sS -m 12 "${BASE}/getStateInstance/${max_api_token}" 2>/dev/null | jsonfilter -e '@.stateInstance' 2>/dev/null | head -1)"
+  [ -n "$state" ] || state="unknown"
+
+  # fallback: getSettings с PHONE приходит только при рабочем GREEN Instance/Token
+  if [ "$state" = "unknown" ] && [ "$phone" != "unknown" ] && [ "$incoming" = "yes" ]; then
+    state="authorized"
+  fi
+fi
+
+if [ "$enabled" = "1" ] && [ "$poll_enabled" = "1" ] && [ "$main" = "1" ] && [ "$state" = "authorized" ] && [ "$incoming" = "yes" ]; then
+  status="ONLINE"
+else
+  status="OFFLINE"
+fi
+
+echo "STATUS=$status"
+echo "INSTANCE=$max_instance_id"
+echo "PHONE=$phone"
+echo "GREEN=$state"
+echo "WEBHOOK_IN=$incoming"
+echo "POLLING=$main"
+echo "TIME=$(date '+%H:%M:%S')"

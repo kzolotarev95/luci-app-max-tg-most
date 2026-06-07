@@ -1,0 +1,37 @@
+#!/bin/sh /etc/rc.common
+# TELEGRAM_MAX_BRIDGE_POLLING_PID_INIT_V1
+
+START=99
+STOP=10
+
+PIDFILE='/var/run/telegram-max-bridge-poll.pid'
+CMD='/usr/bin/telegram-max-bridge-poll'
+
+start() {
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+echo "telegram-max-bridge-poll already running"
+return 0
+fi
+
+rm -f "$PIDFILE"
+rm -rf /tmp/telegram-max-bridge-poll.lock
+
+start-stop-daemon -S -b -m -p "$PIDFILE" -x "$CMD"
+}
+
+stop() {
+start-stop-daemon -K -p "$PIDFILE" 2>/dev/null || true
+
+for P in $(pgrep -f '/usr/bin/telegram-max-bridge-poll' 2>/dev/null || true); do
+kill "$P" 2>/dev/null || true
+done
+
+rm -f "$PIDFILE"
+rm -rf /tmp/telegram-max-bridge-poll.lock
+}
+
+restart() {
+stop
+sleep 2
+start
+}

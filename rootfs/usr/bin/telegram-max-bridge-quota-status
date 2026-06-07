@@ -1,0 +1,32 @@
+#!/bin/sh
+set -u
+
+INST="$(uci -q get telegram_max_bridge.main.max_instance_id 2>/dev/null || echo '?')"
+CHAT_FILE='/tmp/telegram-max-bridge-chats'
+
+if [ -s "$CHAT_FILE" ]; then
+  LOCAL="$(awk -F'|' 'NF && $1 != "" && !seen[$1]++ {c++} END {print c+0}' "$CHAT_FILE" 2>/dev/null)"
+else
+  LOCAL="0"
+fi
+
+LIMIT_LINE="$(logread 2>/dev/null | grep -Ei 'HTTP[ =:]?466|QUOTE_EXCEEDED|QUOTA_EXCEEDED|quotaExceeded|Monthly quota|CORRESPONDENTS_QU' | tail -1 || true)"
+
+if [ -n "$LIMIT_LINE" ]; then
+  echo "LIMIT_STATUS=LIMIT"
+  echo "GREEN API: ЛИМИТ ОБНАРУЖЕН"
+  echo "Instance: $INST"
+  echo "MAX-чаты локально: $LOCAL"
+  echo "Последняя лимитная строка:"
+  echo "$LIMIT_LINE"
+  echo "Что делать: смотри console.green-api.com / тариф / лимиты."
+else
+  echo "LIMIT_STATUS=OK"
+  echo "GREEN API: лимит сейчас не обнаружен"
+  echo "Instance: $INST"
+  echo "MAX-чаты локально: $LOCAL"
+  echo "Реальных ошибок лимита в логах нет."
+  echo "Точный остаток сообщений GREEN обычным API не отдал."
+fi
+
+echo "Время: $(date '+%Y-%m-%d %H:%M:%S')"

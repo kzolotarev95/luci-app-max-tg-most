@@ -1,0 +1,61 @@
+{
+  "luci-app-telegram-max-bridge": {
+    "description": "Grant access to Telegram MAX Bridge",
+    "read": {
+      "uci": [
+        "telegram_max_bridge"
+      ],
+      "file": {
+        "/usr/bin/telegram-max-bridge-control": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-poll-ui": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-backup": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-poll-web": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-green-status": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-quota-status": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-bot-control": [
+          "exec"
+        ]
+      }
+    },
+    "write": {
+      "uci": [
+        "telegram_max_bridge"
+      ],
+      "file": {
+        "/usr/bin/telegram-max-bridge-control": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-poll-ui": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-backup": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-poll-web": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-green-status": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-quota-status": [
+          "exec"
+        ],
+        "/usr/bin/telegram-max-bridge-bot-control": [
+          "exec"
+        ]
+      }
+    }
+  }
+}

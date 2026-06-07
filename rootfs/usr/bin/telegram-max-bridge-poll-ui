@@ -1,0 +1,55 @@
+#!/bin/sh
+
+cmd="${1:-status}"
+
+poll_status() {
+poll_enabled="$(uci -q get telegram_max_bridge.main.poll_enabled 2>/dev/null || echo 0)"
+poll_interval="$(uci -q get telegram_max_bridge.main.poll_interval 2>/dev/null || echo 3)"
+
+echo "Polling MAX → Telegram: $([ "$poll_enabled" = "1" ] && echo ВКЛЮЧЕН || echo ВЫКЛЮЧЕН)"
+echo "Интервал проверки: ${poll_interval} сек."
+
+if [ -x /etc/init.d/telegram-max-bridge-poll ]; then
+/etc/init.d/telegram-max-bridge-poll enabled >/dev/null 2>&1 && echo "Автозапуск: включён" || echo "Автозапуск: выключен"
+else
+echo "Служба: не установлена"
+fi
+
+if pgrep -f telegram-max-bridge-poll >/dev/null 2>&1; then
+echo "Процесс: запущен"
+echo "PID: $(pgrep -f telegram-max-bridge-poll | tr '\n' ' ')"
+else
+echo "Процесс: не запущен"
+fi
+
+echo
+echo "Последние логи polling:"
+logread -e telegram-max-bridge-poll | tail -20
+}
+
+case "$cmd" in
+status)
+poll_status
+;;
+enable|start)
+uci set telegram_max_bridge.main.poll_enabled='1'
+uci commit telegram_max_bridge
+/etc/init.d/telegram-max-bridge-poll enable 2>/dev/null || true
+/etc/init.d/telegram-max-bridge-poll restart 2>/dev/null || true
+echo "OK: polling включён и перезапущен"
+;;
+disable|stop)
+uci set telegram_max_bridge.main.poll_enabled='0'
+uci commit telegram_max_bridge
+/etc/init.d/telegram-max-bridge-poll stop 2>/dev/null || true
+echo "OK: polling выключен"
+;;
+restart)
+/etc/init.d/telegram-max-bridge-poll restart 2>/dev/null || true
+echo "OK: polling перезапущен"
+;;
+*)
+echo "Команды: status | enable | disable | restart"
+exit 1
+;;
+esac

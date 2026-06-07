@@ -1,0 +1,107 @@
+#!/bin/sh
+set -u
+
+main_count() {
+  C=0
+  for P in $(ps w | awk '/\/usr\/bin\/telegram-max-bridge-poll/ && !/awk/ {print $1}'); do
+    PP="$(awk '/^PPid:/ {print $2}' /proc/$P/status 2>/dev/null)"
+    [ "$PP" = "1" ] && C=$((C+1))
+  done
+  echo "$C"
+}
+
+kill_poll() {
+  /etc/init.d/telegram-max-bridge-poll stop 2>/dev/null || true
+  ps w | awk '/\/usr\/bin\/telegram-max-bridge-poll/ && !/awk/ {print $1}' | while read P; do
+    kill "$P" 2>/dev/null || true
+  done
+  sleep 1
+  ps w | awk '/\/usr\/bin\/telegram-max-bridge-poll/ && !/awk/ {print $1}' | while read P; do
+    kill -9 "$P" 2>/dev/null || true
+  done
+  rm -f /tmp/telegram-max-bridge-poll.lock /var/run/telegram-max-bridge-poll.pid
+}
+
+status_out() {
+  enabled="$(uci -q get telegram_max_bridge.main.enabled 2>/dev/null || echo 0)"
+  poll_enabled="$(uci -q get telegram_max_bridge.main.poll_enabled 2>/dev/null || echo 0)"
+  tg_token="$(uci -q get telegram_max_bridge.main.telegram_bot_token 2>/dev/null || true)"
+  max_token="$(uci -q get telegram_max_bridge.main.max_api_token 2>/dev/null || true)"
+  inst="$(uci -q get telegram_max_bridge.main.max_instance_id 2>/dev/null || true)"
+  chat="$(uci -q get telegram_max_bridge.main.telegram_channel_id 2>/dev/null || true)"
+  main="$(main_count)"
+
+  if [ "$enabled" = "1" ] && [ "$poll_enabled" = "1" ] && [ "$main" = "1" ] && [ -n "$tg_token" ] && [ -n "$max_token" ]; then
+    st="RUNNING"
+  elif [ -z "$tg_token" ] || [ -z "$max_token" ]; then
+    st="NO_TOKENS"
+  else
+    st="STOPPED"
+  fi
+
+  echo "STATUS=$st"
+  echo "ENABLED=$enabled"
+  echo "POLL_ENABLED=$poll_enabled"
+  echo "POLLING_PROCESSES=$main"
+  echo "GREEN_INSTANCE=${inst:-empty}"
+  echo "TELEGRAM_CHAT=${chat:-empty}"
+  [ -n "$tg_token" ] && echo "TELEGRAM_TOKEN=present" || echo "TELEGRAM_TOKEN=empty"
+  [ -n "$max_token" ] && echo "GREEN_TOKEN=present" || echo "GREEN_TOKEN=empty"
+  echo "TIME=$(date '+%Y-%m-%d %H:%M:%S')"
+}
+
+restart_bot() {
+  uci set telegram_max_bridge.main.enabled='1'
+  uci set telegram_max_bridge.main.poll_enabled='1'
+  uci commit telegram_max_bridge
+  kill_poll
+  /etc/init.d/telegram-max-bridge-poll enable 2>/dev/null || true
+  /etc/init.d/telegram-max-bridge-poll start 2>/dev/null || true
+  sleep 2
+  logger -t telegram-max-bridge "WEB control: restart bot"
+  status_out
+}
+
+stop_bot() {
+  uci set telegram_max_bridge.main.poll_enabled='0'
+  uci commit telegram_max_bridge
+  /etc/init.d/telegram-max-bridge-poll disable 2>/dev/null || true
+  kill_poll
+  logger -t telegram-max-bridge "WEB control: stop bot"
+  status_out
+}
+
+revoke_local() {
+  kill_poll
+  /etc/init.d/telegram-max-bridge-poll disable 2>/dev/null || true
+
+  uci set telegram_max_bridge.main.enabled='0'
+  uci set telegram_max_bridge.main.poll_enabled='0'
+  uci set telegram_max_bridge.main.max_instance_id=''
+  uci set telegram_max_bridge.main.max_api_token=''
+  uci set telegram_max_bridge.main.telegram_bot_token=''
+  uci set telegram_max_bridge.main.telegram_webhook_url=''
+  uci set telegram_max_bridge.main.telegram_webhook_secret=''
+  uci set telegram_max_bridge.main.webhook_secret=''
+  uci commit telegram_max_bridge
+
+  rm -f /tmp/telegram-max-bridge-tg-offset \
+        /tmp/telegram-max-bridge-tg-webhook-deleted \
+        /tmp/telegram-max-bridge-active-chat \
+        /tmp/telegram-max-bridge-last-chat \
+        /tmp/telegram-max-bridge-green-quota-last
+
+  logger -t telegram-max-bridge "WEB control: local tokens revoked and bridge disabled"
+  status_out
+}
+
+case "${1:-status}" in
+  status) status_out ;;
+  restart) restart_bot ;;
+  stop) stop_bot ;;
+  revoke) revoke_local ;;
+  *)
+    echo "Usage: $0 status|restart|stop|revoke"
+    exit 1
+  ;;
+esac

@@ -1,0 +1,17 @@
+#!/bin/sh
+TMP="/tmp/tmb-upload-restore-$$.tar.gz"
+cat > "$TMP"
+
+echo "Content-Type: text/plain"
+echo
+
+if [ ! -s "$TMP" ]; then
+  echo "FAIL: uploaded file is empty"
+  rm -f "$TMP"
+  exit 1
+fi
+
+/usr/bin/telegram-max-bridge-restore "$TMP"
+RC="$?"
+rm -f "$TMP"
+exit "$RC"

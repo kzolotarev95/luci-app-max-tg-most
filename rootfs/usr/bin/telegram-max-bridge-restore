@@ -1,0 +1,47 @@
+#!/bin/sh
+set -eu
+
+ARCH="${1:-}"
+[ -n "$ARCH" ] && [ -f "$ARCH" ] || { echo "FAIL: backup archive not found"; exit 1; }
+
+TMP="/tmp/tmb-restore-$$"
+rm -rf "$TMP"
+mkdir -p "$TMP"
+
+tar -tzf "$ARCH" >/dev/null
+tar -xzf "$ARCH" -C "$TMP"
+
+FILES="$(find "$TMP" -type d -name files | head -1)"
+[ -n "$FILES" ] && [ -d "$FILES" ] || { echo "FAIL: files dir not found in backup"; exit 1; }
+[ -f "$FILES/etc/config/telegram_max_bridge" ] || { echo "FAIL: not Telegram-MAX Bridge backup"; exit 1; }
+
+/etc/init.d/telegram-max-bridge-poll stop 2>/dev/null || true
+for P in $(pgrep -f '/usr/bin/telegram-max-bridge-poll' 2>/dev/null || true); do kill "$P" 2>/dev/null || true; done
+sleep 1
+
+cd "$FILES"
+find . -type d | while read X; do
+  [ "$X" = "." ] && continue
+  mkdir -p "/$X" 2>/dev/null || true
+done
+
+find . ! -type d | while read X; do
+  mkdir -p "/$(dirname "$X")" 2>/dev/null || true
+  cp -a "$X" "/$X"
+done
+
+STATE="$(dirname "$FILES")/tmp-state"
+cp -a "$STATE"/telegram-max-bridge-* /tmp/ 2>/dev/null || true
+
+chmod +x /usr/bin/telegram-max-bridge-* /etc/init.d/telegram-max-bridge-poll /www/cgi-bin/telegram-max-* 2>/dev/null || true
+rm -rf /tmp/telegram-max-bridge-poll.lock /tmp/luci-indexcache* /tmp/luci-modulecache* /tmp/luci-*.json 2>/dev/null || true
+rm -f /var/run/telegram-max-bridge-poll.pid
+
+/etc/init.d/telegram-max-bridge-poll enable 2>/dev/null || true
+/etc/init.d/telegram-max-bridge-poll start 2>/dev/null || /usr/bin/telegram-max-bridge-poll >/dev/null 2>&1 &
+
+(sleep 2; /etc/init.d/rpcd restart 2>/dev/null || true; /etc/init.d/uhttpd restart 2>/dev/null || true) >/dev/null 2>&1 &
+
+echo "OK: backup restored"
+echo "ARCHIVE=$ARCH"
+echo "Reload LuCI after 3-5 seconds"

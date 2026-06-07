@@ -1,0 +1,89 @@
+#!/bin/sh
+. /usr/lib/telegram-max-bridge/common.sh
+load_tmb_config
+BODY="$(read_cgi_body)"
+cgi_json_header '200 OK'
+
+[ "$enabled" = "1" ] || { log_tmb 'GREEN webhook ignored: bridge disabled'; cgi_ok 'bridge disabled'; exit 0; }
+[ "$direction" = "max_to_telegram" ] || { log_tmb 'GREEN webhook ignored: wrong direction'; cgi_ok 'direction disabled'; exit 0; }
+
+if [ -n "$webhook_secret" ]; then
+	[ "$HTTP_AUTHORIZATION" = "Bearer $webhook_secret" ] || { log_tmb 'GREEN webhook unauthorized'; cgi_error 'unauthorized'; exit 0; }
+fi
+
+chat_id="$(jget "$BODY" '@.senderData.chatId')"
+sender_name="$(jget "$BODY" '@.senderData.senderName')"
+sender_phone="$(jget "$BODY" '@.senderData.sender')"
+type_msg="$(jget "$BODY" '@.messageData.typeMessage')"
+
+if [ -n "$max_chat_id" ] && [ "$chat_id" != "$max_chat_id" ]; then
+	log_tmb "GREEN webhook skipped: chat=$chat_id filter=$max_chat_id"
+	cgi_ok 'chat skipped by filter'
+	exit 0
+fi
+
+sender_block="$(format_sender_block "$sender_name" '' "$sender_phone")"
+text=''
+result=''
+
+case "$type_msg" in
+	textMessage)
+		text="$(jget "$BODY" '@.messageData.textMessageData.textMessage')"
+		[ -n "$sender_block" ] && text="$sender_block
+$text"
+		result="$(send_telegram_text "$telegram_channel_id" "$text")"
+		;;
+	extendedTextMessage)
+		text="$(jget "$BODY" '@.messageData.extendedTextMessageData.text')"
+		[ -n "$sender_block" ] && text="$sender_block
+$text"
+		result="$(send_telegram_text "$telegram_channel_id" "$text")"
+		;;
+	imageMessage)
+		file_url="$(jget "$BODY" '@.messageData.fileMessageData.downloadUrl')"
+		caption="$(jget "$BODY" '@.messageData.fileMessageData.caption')"
+		[ -z "$caption" ] && caption='📷 Photo'
+		[ -n "$sender_block" ] && caption="$sender_block
+$caption"
+		if [ -n "$file_url" ]; then
+			result="$(send_telegram_file_by_url 'sendPhoto' 'photo' "$telegram_channel_id" "$file_url" "$caption")"
+		else
+			result="$(send_telegram_text "$telegram_channel_id" "$caption")"
+		fi
+		;;
+	videoMessage)
+		file_url="$(jget "$BODY" '@.messageData.fileMessageData.downloadUrl')"
+		caption="$(jget "$BODY" '@.messageData.fileMessageData.caption')"
+		[ -z "$caption" ] && caption='🎥 Video'
+		[ -n "$sender_block" ] && caption="$sender_block
+$caption"
+		if [ -n "$file_url" ]; then
+			result="$(send_telegram_file_by_url 'sendVideo' 'video' "$telegram_channel_id" "$file_url" "$caption")"
+		else
+			result="$(send_telegram_text "$telegram_channel_id" "$caption")"
+		fi
+		;;
+	documentMessage|audioMessage|voiceMessage|fileMessage)
+		file_url="$(jget "$BODY" '@.messageData.fileMessageData.downloadUrl')"
+		filename="$(jget "$BODY" '@.messageData.fileMessageData.fileName')"
+		caption="$(jget "$BODY" '@.messageData.fileMessageData.caption')"
+		[ -z "$filename" ] && filename='file'
+		[ -z "$caption" ] && caption="📎 $filename"
+		[ -n "$sender_block" ] && caption="$sender_block
+$caption"
+		if [ -n "$file_url" ]; then
+			result="$(send_telegram_file_by_url 'sendDocument' 'document' "$telegram_channel_id" "$file_url" "$caption")"
+		else
+			result="$(send_telegram_text "$telegram_channel_id" "$caption")"
+		fi
+		;;
+	*)
+		text="Unsupported Max message type: ${type_msg:-unknown}"
+		[ -n "$sender_block" ] && text="$sender_block
+$text"
+		result="$(send_telegram_text "$telegram_channel_id" "$text")"
+		;;
+esac
+
+log_tmb "GREEN->Telegram type=${type_msg:-unknown} chat=${chat_id:-unknown} result=$(printf '%s' "$result" | tr '\n' ' ' | cut -c1-180)"
+printf '{"status":"processed","result":%s}\n' "$(printf '%s' "$result" | grep -q '^{' && printf '%s' "$result" || printf '"%s"' "$(printf '%s' "$result" | json_escape)")"

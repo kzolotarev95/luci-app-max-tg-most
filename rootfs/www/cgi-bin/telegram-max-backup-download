@@ -1,0 +1,16 @@
+#!/bin/sh
+ARCH="$(/usr/bin/telegram-max-bridge-backup latest 2>/dev/null | head -1)"
+
+if [ -z "$ARCH" ] || [ ! -f "$ARCH" ]; then
+  echo "Status: 404 Not Found"
+  echo "Content-Type: text/plain"
+  echo
+  echo "No backup found"
+  exit 0
+fi
+
+BASE="$(basename "$ARCH")"
+echo "Content-Type: application/gzip"
+echo "Content-Disposition: attachment; filename=\"$BASE\""
+echo
+cat "$ARCH"

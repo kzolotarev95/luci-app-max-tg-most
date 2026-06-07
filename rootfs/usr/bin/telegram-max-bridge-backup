@@ -1,0 +1,86 @@
+#!/bin/sh
+
+case "$1" in
+  create)
+    TS="$(date +%Y%m%d-%H%M%S)"
+    DIR="/root/TMB-WEB-FULL-BACKUP-$TS"
+    ARCH="$DIR.tar.gz"
+
+    mkdir -p "$DIR/files" "$DIR/tmp-state"
+
+    for P in \
+      /etc/config/telegram_max_bridge \
+      /usr/lib/telegram-max-bridge \
+      /usr/bin/telegram-max-bridge-control \
+      /usr/bin/telegram-max-bridge-poll \
+      /usr/bin/telegram-max-bridge-poll-ui \
+      /usr/bin/telegram-max-bridge-backup \
+      /usr/bin/telegram-max-bridge-restore \
+      /etc/init.d/telegram-max-bridge-poll \
+      /www/cgi-bin/telegram-max-green \
+      /www/cgi-bin/telegram-max-telegram \
+      /www/cgi-bin/telegram-max-health \
+      /www/cgi-bin/telegram-max-backup-download \
+      /www/cgi-bin/telegram-max-backup-upload \
+      /www/luci-static/resources/view/telegram-max-bridge.js \
+      /usr/share/luci/menu.d/luci-app-telegram-max-bridge.json \
+      /usr/share/rpcd/acl.d/luci-app-telegram-max-bridge.json
+    do
+      [ -e "$P" ] || continue
+      mkdir -p "$DIR/files$(dirname "$P")"
+      cp -a "$P" "$DIR/files$P"
+    done
+
+    cp -a /tmp/telegram-max-bridge-* "$DIR/tmp-state/" 2>/dev/null || true
+
+    {
+      echo "DATE=$TS"
+      telegram-max-bridge-control health 2>&1 || true
+      telegram-max-bridge-control status 2>&1 || true
+      telegram-max-bridge-poll-ui status 2>&1 || true
+      df -h / 2>&1 || true
+    } > "$DIR/backup-info.txt"
+
+    cat >"$DIR/rollback.sh" <<ROLLBACK_EOF
+#!/bin/sh
+set -eu
+SRC="$DIR/files"
+
+/etc/init.d/telegram-max-bridge-poll stop 2>/dev/null || true
+for P in \$(pgrep -f '/usr/bin/telegram-max-bridge-poll' 2>/dev/null || true); do kill "\$P" 2>/dev/null || true; done
+sleep 1
+
+cd "\$SRC"
+find . -type f -o -type l -o -type d | while read X; do
+  [ "\$X" = "." ] && continue
+  mkdir -p "/\$(dirname "\$X")" 2>/dev/null || true
+  cp -a "\$X" "/\$X" 2>/dev/null || true
+done
+
+cp -a "$DIR/tmp-state"/telegram-max-bridge-* /tmp/ 2>/dev/null || true
+chmod +x /usr/bin/telegram-max-bridge-* /etc/init.d/telegram-max-bridge-poll /www/cgi-bin/telegram-max-* 2>/dev/null || true
+rm -rf /tmp/telegram-max-bridge-poll.lock /tmp/luci-indexcache* /tmp/luci-modulecache* /tmp/luci-*.json 2>/dev/null || true
+rm -f /var/run/telegram-max-bridge-poll.pid
+
+/etc/init.d/telegram-max-bridge-poll enable 2>/dev/null || true
+/etc/init.d/telegram-max-bridge-poll start 2>/dev/null || /usr/bin/telegram-max-bridge-poll >/dev/null 2>&1 &
+echo "OK: restored from $ARCH"
+ROLLBACK_EOF
+
+    chmod +x "$DIR/rollback.sh"
+    tar -czf "$ARCH" -C /root "$(basename "$DIR")"
+    sha256sum "$ARCH" > "$ARCH.sha256"
+    echo "$ARCH" > /tmp/telegram-max-bridge-last-backup
+
+    echo "OK: backup created"
+    echo "BACKUP=$ARCH"
+    echo "ROLLBACK=sh $DIR/rollback.sh"
+    ;;
+  latest)
+    cat /tmp/telegram-max-bridge-last-backup 2>/dev/null || ls -t /root/TMB-WEB-FULL-BACKUP-*.tar.gz /root/STABLE-TELEGRAM-MAX-BRIDGE-FULL-WORKING-*.tar.gz 2>/dev/null | head -1
+    ;;
+  *)
+    echo "Usage: $0 create|latest"
+    exit 1
+    ;;
+esac

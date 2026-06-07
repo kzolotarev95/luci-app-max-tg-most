@@ -1,0 +1,430 @@
+#!/bin/sh
+# TELEGRAM_MAX_BRIDGE_POLLING_MEDIA_REPLY_BUTTONS_V4
+
+LOCKDIR="/tmp/telegram-max-bridge-poll.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+logger -t telegram-max-bridge-poll "already running, exit duplicate"
+exit 0
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT INT TERM
+
+. /usr/lib/telegram-max-bridge/common.sh
+
+TG_OFFSET_FILE="/tmp/telegram-max-bridge-tg-offset"
+TG_MAP_FILE="/tmp/telegram-max-bridge-msg-map"
+TG_LAST_CHAT_FILE="/tmp/telegram-max-bridge-last-chat"
+TG_ACTIVE_CHAT_FILE="/tmp/telegram-max-bridge-active-chat"
+TG_CHATS_FILE="/tmp/telegram-max-bridge-chats"
+
+log(){ logger -t telegram-max-bridge-poll "$*"; }
+json_get(){ jsonfilter -s "$1" -e "$2" 2>/dev/null | head -n 1; }
+
+tg_api_raw() {
+method="$1"
+json="$2"
+telegram_api "$method" "$json"
+}
+
+tg_answer_callback() {
+cbid="$1"
+text="$2"
+cbid_e="$(printf '%s' "$cbid" | json_escape)"
+text_e="$(printf '%s' "$text" | json_escape)"
+tg_api_raw "answerCallbackQuery" "{\"callback_query_id\":\"${cbid_e}\",\"text\":\"${text_e}\",\"show_alert\":false}" >/dev/null 2>&1 || true
+}
+
+tg_send_text_buttons() {
+chat="$1"
+text="$2"
+max_chat="$3"
+label="$4"
+
+chat_e="$(printf '%s' "$chat" | json_escape)"
+text_e="$(printf '%s' "$text" | json_escape)"
+max_e="$(printf '%s' "$max_chat" | json_escape)"
+label_e="$(printf '%s' "$label" | json_escape)"
+
+tg_api_raw "sendMessage" "{\"chat_id\":\"${chat_e}\",\"text\":\"${text_e}\",\"disable_web_page_preview\":false,\"reply_markup\":{\"inline_keyboard\":[[{\"text\":\"✍️ Ответить: ${label_e}\",\"callback_data\":\"reply:${max_e}\"}],[{\"text\":\"📋 Последние чаты\",\"callback_data\":\"chats\"}]]}}"
+}
+
+tg_send_media_buttons() {
+method="$1"
+field="$2"
+chat="$3"
+url="$4"
+caption="$5"
+max_chat="$6"
+label="$7"
+
+chat_e="$(printf '%s' "$chat" | json_escape)"
+url_e="$(printf '%s' "$url" | json_escape)"
+caption_e="$(printf '%s' "$caption" | json_escape)"
+max_e="$(printf '%s' "$max_chat" | json_escape)"
+label_e="$(printf '%s' "$label" | json_escape)"
+
+tg_api_raw "$method" "{\"chat_id\":\"${chat_e}\",\"${field}\":\"${url_e}\",\"caption\":\"${caption_e}\",\"reply_markup\":{\"inline_keyboard\":[[{\"text\":\"✍️ Ответить: ${label_e}\",\"callback_data\":\"reply:${max_e}\"}],[{\"text\":\"📋 Последние чаты\",\"callback_data\":\"chats\"}]]}}"
+}
+
+delete_notification() {
+base="$1"; token="$2"; receipt="$3"
+[ -n "$receipt" ] || return 0
+if command -v curl >/dev/null 2>&1; then
+curl -sS -m 15 -X DELETE "${base}/deleteNotification/${token}/${receipt}" >/dev/null 2>&1 || true
+else
+uclient-fetch -q -T 15 -O - "${base}/deleteNotification/${token}/${receipt}" >/dev/null 2>&1 || true
+fi
+}
+
+save_chat() {
+max_chat="$1"
+name="$2"
+[ -n "$max_chat" ] || return 0
+[ -n "$name" ] || name="$max_chat"
+
+echo "$max_chat" > "$TG_LAST_CHAT_FILE"
+
+tmp="${TG_CHATS_FILE}.tmp"
+grep -v "^${max_chat}|" "$TG_CHATS_FILE" 2>/dev/null > "$tmp" || true
+printf '%s|%s\n' "$max_chat" "$name" >> "$tmp"
+tail -n 20 "$tmp" > "$TG_CHATS_FILE"
+rm -f "$tmp"
+}
+
+store_tg_map() {
+result="$1"
+max_chat="$2"
+name="$3"
+
+msg_id="$(json_get "$result" '@.result.message_id')"
+[ -n "$msg_id" ] || return 0
+[ -n "$max_chat" ] || return 0
+
+save_chat "$max_chat" "$name"
+
+tmp="${TG_MAP_FILE}.tmp"
+grep -v "^${msg_id} " "$TG_MAP_FILE" 2>/dev/null > "$tmp" || true
+echo "${msg_id} ${max_chat}" >> "$tmp"
+tail -n 500 "$tmp" > "$TG_MAP_FILE"
+rm -f "$tmp"
+}
+
+lookup_tg_map() {
+msg_id="$1"
+awk -v id="$msg_id" '$1 == id { print $2 }' "$TG_MAP_FILE" 2>/dev/null | tail -n 1
+}
+
+tg_show_chats() {
+chat="$1"
+
+chat_e="$(printf '%s' "$chat" | json_escape)"
+rows=""
+
+if [ -s "$TG_CHATS_FILE" ]; then
+rows="$(tail -n 10 "$TG_CHATS_FILE" | awk -F'|' '
+{
+gsub(/\\/,"\\\\",$1); gsub(/"/,"\\\"",$1);
+gsub(/\\/,"\\\\",$2); gsub(/"/,"\\\"",$2);
+printf "%s[{\"text\":\"%s\",\"callback_data\":\"reply:%s\"}]", sep, $2, $1;
+sep=",";
+}')"
+fi
+
+if [ -z "$rows" ]; then
+tg_api_raw "sendMessage" "{\"chat_id\":\"${chat_e}\",\"text\":\"Пока нет последних MAX-чатов. Дождись входящего сообщения из MAX.\"}" >/dev/null 2>&1 || true
+else
+tg_api_raw "sendMessage" "{\"chat_id\":\"${chat_e}\",\"text\":\"Выбери MAX-чат для ответа:\",\"reply_markup\":{\"inline_keyboard\":[${rows}]}}" >/dev/null 2>&1 || true
+fi
+}
+
+tg_init_offset() {
+[ -f "$TG_OFFSET_FILE" ] && return 0
+telegram_api "deleteWebhook" '{"drop_pending_updates":true}' >/dev/null 2>&1 || true
+resp="$(uclient-fetch -q -T 15 -O - "https://api.telegram.org/bot${telegram_bot_token}/getUpdates?timeout=0&limit=100" 2>/dev/null || true)"
+last="$(jsonfilter -s "$resp" -e '@.result[*].update_id' 2>/dev/null | tail -n 1)"
+[ -n "$last" ] && echo "$((last + 1))" > "$TG_OFFSET_FILE" || echo "0" > "$TG_OFFSET_FILE"
+}
+
+tg_get_updates() {
+offset="$(cat "$TG_OFFSET_FILE" 2>/dev/null || echo 0)"
+uclient-fetch -q -T 15 -O - "https://api.telegram.org/bot${telegram_bot_token}/getUpdates?timeout=0&limit=1&offset=${offset}" 2>/dev/null || true
+}
+
+
+# TELEGRAM_MAX_BRIDGE_OUTGOING_MEDIA_V6C
+tg_pick_v6c() {
+j="$1"
+p1="$2"
+p2="$3"
+v="$(jsonfilter -s "$j" -e "$p1" 2>/dev/null | tail -n 1)"
+[ -n "$v" ] || v="$(jsonfilter -s "$j" -e "$p2" 2>/dev/null | tail -n 1)"
+printf '%s' "$v"
+}
+
+tg_file_url_v6c() {
+file_id="$1"
+[ -n "$file_id" ] || return 1
+file_e="$(printf '%s' "$file_id" | json_escape)"
+res="$(telegram_api "getFile" "{\"file_id\":\"${file_e}\"}" 2>/dev/null || true)"
+path="$(json_get "$res" '@.result.file_path')"
+[ -n "$path" ] || return 1
+printf '%s' "https://api.telegram.org/file/bot${telegram_bot_token}/${path}"
+}
+
+tg_send_max_file_v6c() {
+target="$1"
+kind="$2"
+file_id="$3"
+filename="$4"
+caption="$5"
+
+[ -n "$target" ] || return 1
+[ -n "$file_id" ] || return 1
+
+url="$(tg_file_url_v6c "$file_id" 2>/dev/null || true)"
+if [ -z "$url" ]; then
+log "Telegram->MAX media FAIL kind=$kind stage=getFile"
+return 1
+fi
+
+[ -n "$filename" ] || filename="${kind}.bin"
+
+[ -n "$caption" ] && send_green_text "$target" "$caption" >/dev/null 2>&1 || true
+
+res="$(send_green_file_by_url "$target" "$url" "$filename" "" 2>&1 || true)"
+case "$res" in
+*idMessage*) log "Telegram->MAX media ok kind=$kind max_chat=$target" ;;
+*) log "Telegram->MAX media FAIL kind=$kind res=$(printf '%s' "$res" | cut -c1-120)" ;;
+esac
+printf '%s' "$res"
+}
+
+tg_to_max_send_update() {
+target="$1"
+text="$2"
+upd="$3"
+
+fid="$(tg_pick_v6c "$upd" '@.result[0].message.photo[*].file_id' '@.message.photo[*].file_id')"
+if [ -n "$fid" ]; then
+tg_send_max_file_v6c "$target" "photo" "$fid" "photo.jpg" "$text"
+return 0
+fi
+
+fid="$(tg_pick_v6c "$upd" '@.result[0].message.video.file_id' '@.message.video.file_id')"
+if [ -n "$fid" ]; then
+name="$(tg_pick_v6c "$upd" '@.result[0].message.video.file_name' '@.message.video.file_name')"
+[ -n "$name" ] || name="video.mp4"
+tg_send_max_file_v6c "$target" "video" "$fid" "$name" "$text"
+return 0
+fi
+
+fid="$(tg_pick_v6c "$upd" '@.result[0].message.audio.file_id' '@.message.audio.file_id')"
+if [ -n "$fid" ]; then
+name="$(tg_pick_v6c "$upd" '@.result[0].message.audio.file_name' '@.message.audio.file_name')"
+[ -n "$name" ] || name="audio.mp3"
+tg_send_max_file_v6c "$target" "audio" "$fid" "$name" "$text"
+return 0
+fi
+
+fid="$(tg_pick_v6c "$upd" '@.result[0].message.voice.file_id' '@.message.voice.file_id')"
+if [ -n "$fid" ]; then
+tg_send_max_file_v6c "$target" "voice" "$fid" "voice.ogg" "$text"
+return 0
+fi
+
+fid="$(tg_pick_v6c "$upd" '@.result[0].message.document.file_id' '@.message.document.file_id')"
+if [ -n "$fid" ]; then
+name="$(tg_pick_v6c "$upd" '@.result[0].message.document.file_name' '@.message.document.file_name')"
+[ -n "$name" ] || name="file.bin"
+tg_send_max_file_v6c "$target" "document" "$fid" "$name" "$text"
+return 0
+fi
+
+fid="$(tg_pick_v6c "$upd" '@.result[0].message.sticker.file_id' '@.message.sticker.file_id')"
+if [ -n "$fid" ]; then
+tg_send_max_file_v6c "$target" "sticker" "$fid" "sticker.webp" ""
+return 0
+fi
+
+[ -n "$text" ] && send_green_text "$target" "$text" 2>&1 || { log "Telegram->MAX skipped: empty text no_media"; return 0; }
+}
+process_telegram_update() {
+upd="$1"
+
+update_id="$(json_get "$upd" '@.result[0].update_id')"
+[ -n "$update_id" ] || return 0
+echo "$((update_id + 1))" > "$TG_OFFSET_FILE"
+
+cb_id="$(json_get "$upd" '@.result[0].callback_query.id')"
+cb_data="$(json_get "$upd" '@.result[0].callback_query.data')"
+cb_chat="$(json_get "$upd" '@.result[0].callback_query.message.chat.id')"
+
+if [ -n "$cb_id" ]; then
+case "$cb_data" in
+reply:*)
+target="${cb_data#reply:}"
+echo "$target" > "$TG_ACTIVE_CHAT_FILE"
+tg_answer_callback "$cb_id" "Выбран MAX-чат. Теперь пиши сообщение в бота."
+tg_api_raw "sendMessage" "{\"chat_id\":\"${cb_chat}\",\"text\":\"✅ MAX-чат выбран. Теперь просто напиши сообщение — я отправлю его туда.\"}" >/dev/null 2>&1 || true
+log "Telegram menu selected MAX chat=$target"
+;;
+chats)
+tg_answer_callback "$cb_id" "Открываю список чатов"
+tg_show_chats "$cb_chat"
+;;
+esac
+return 0
+fi
+
+tg_chat="$(json_get "$upd" '@.result[0].message.chat.id')"
+[ -n "$tg_chat" ] || return 0
+
+# TMB_TG_REPLY_MAP_FIRST_V1
+reply_mid="$(json_get "$upd" '@.result[0].message.reply_to_message.message_id')"
+reply_target=""
+if [ -n "$reply_mid" ] && [ -f "$TG_MAP_FILE" ]; then
+  reply_target="$(awk -v id="$reply_mid" '$1 == id {v=$2} END {print v}' "$TG_MAP_FILE" 2>/dev/null || true)"
+  if [ -n "$reply_target" ]; then
+    echo "$reply_target" > "$TG_ACTIVE_CHAT_FILE"
+    log "Telegram reply_to mapped MAX chat=$reply_target tg_msg=$reply_mid"
+  fi
+fi
+
+if [ -n "$telegram_channel_id" ] && [ "$tg_chat" != "$telegram_channel_id" ]; then
+log "Telegram->MAX skipped: chat=$tg_chat allowed=$telegram_channel_id"
+return 0
+fi
+
+text="$(json_get "$upd" '@.result[0].message.text')"
+[ -n "$text" ] || text="$(json_get "$upd" '@.result[0].message.caption')"
+case "$upd" in *\"photo\"*|*\"video\"*|*\"audio\"*|*\"voice\"*|*\"document\"*|*\"sticker\"*) : ;; *) [ -n "$text" ] || { log "Telegram->MAX skipped: empty text no_media"; return 0; } ;; esac
+
+if [ "$text" = "/chats" ] || [ "$text" = "чаты" ]; then
+tg_show_chats "$tg_chat"
+return 0
+fi
+
+reply_mid="$(json_get "$upd" '@.result[0].message.reply_to_message.message_id')"
+target=""
+[ -n "$reply_mid" ] && target="$(lookup_tg_map "$reply_mid" || true)"
+[ -z "$target" ] && target="$(cat "$TG_ACTIVE_CHAT_FILE" 2>/dev/null || true)"
+[ -z "$target" ] && target="$(cat "$TG_LAST_CHAT_FILE" 2>/dev/null || true)"
+
+if [ -z "$target" ]; then
+tg_api_raw "sendMessage" "{\"chat_id\":\"${tg_chat}\",\"text\":\"⚠️ Сначала выбери MAX-чат кнопкой под сообщением или командой /chats.\"}" >/dev/null 2>&1 || true
+log "Telegram->MAX skipped: no target"
+return 0
+fi
+
+	res="$(tg_to_max_send_update "$target" "$text" "$upd" 2>&1 || true)"
+if echo "$res" | grep -qE '"idMessage"|"sent"|true'; then
+log "Telegram->MAX reply ok tg_chat=$tg_chat max_chat=$target"
+tg_api_raw "sendMessage" "{\"chat_id\":\"${tg_chat}\",\"text\":\"✅ Отправлено в MAX\"}" >/dev/null 2>&1 || true
+else
+log "Telegram->MAX reply FAIL tg_chat=$tg_chat max_chat=$target result=$(printf '%s' "$res" | tr '\n' ' ' | cut -c1-180)"
+tg_api_raw "sendMessage" "{\"chat_id\":\"${tg_chat}\",\"text\":\"❌ Не удалось отправить в MAX. Смотри логи.\"}" >/dev/null 2>&1 || true
+fi
+}
+
+process_notification() {
+resp="$1"
+
+receipt="$(json_get "$resp" '@.receiptId')"
+[ -n "$receipt" ] || return 0
+
+type_webhook="$(json_get "$resp" '@.body.typeWebhook')"
+chat_id="$(json_get "$resp" '@.body.senderData.chatId')"
+sender_name="$(json_get "$resp" '@.body.senderData.senderName')"
+type_message="$(json_get "$resp" '@.body.messageData.typeMessage')"
+
+if [ "$type_webhook" != "incomingMessageReceived" ]; then
+delete_notification "$base" "$max_api_token" "$receipt"
+return 0
+fi
+
+label="$sender_name"
+[ -n "$label" ] || label="$chat_id"
+
+file_url="$(json_get "$resp" '@.body.messageData.fileMessageData.downloadUrl')"
+file_name="$(json_get "$resp" '@.body.messageData.fileMessageData.fileName')"
+caption="$(json_get "$resp" '@.body.messageData.fileMessageData.caption')"
+
+prefix=""
+[ "$prefix_sender" = "1" ] && { [ -n "$sender_name" ] && prefix="👤 ${sender_name}" || prefix="👤 MAX"; }
+
+case "$type_message" in
+textMessage|extendedTextMessage)
+text="$(json_get "$resp" '@.body.messageData.textMessageData.textMessage')"
+[ -n "$text" ] || text="$(json_get "$resp" '@.body.messageData.extendedTextMessageData.text')"
+[ -n "$text" ] || text="Пустое сообщение MAX"
+[ -n "$prefix" ] && text="${prefix}
+${text}"
+result="$(tg_send_text_buttons "$telegram_channel_id" "$text" "$chat_id" "$label" 2>&1 || true)"
+;;
+imageMessage)
+[ -z "$caption" ] && caption="📷 Фото"
+[ -n "$prefix" ] && caption="${prefix}
+${caption}"
+result="$(tg_send_media_buttons 'sendPhoto' 'photo' "$telegram_channel_id" "$file_url" "$caption" "$chat_id" "$label" 2>&1 || true)"
+;;
+videoMessage)
+[ -z "$caption" ] && caption="🎥 Видео"
+[ -n "$prefix" ] && caption="${prefix}
+${caption}"
+result="$(tg_send_media_buttons 'sendVideo' 'video' "$telegram_channel_id" "$file_url" "$caption" "$chat_id" "$label" 2>&1 || true)"
+;;
+audioMessage|voiceMessage)
+[ -z "$caption" ] && caption="🎧 Аудио"
+[ -n "$prefix" ] && caption="${prefix}
+${caption}"
+result="$(tg_send_media_buttons 'sendAudio' 'audio' "$telegram_channel_id" "$file_url" "$caption" "$chat_id" "$label" 2>&1 || true)"
+;;
+stickerMessage)
+result="$(tg_send_media_buttons 'sendSticker' 'sticker' "$telegram_channel_id" "$file_url" "" "$chat_id" "$label" 2>&1 || true)"
+;;
+*)
+text="Unsupported Max message type: ${type_message:-unknown}"
+[ -n "$prefix" ] && text="${prefix}
+${text}"
+result="$(tg_send_text_buttons "$telegram_channel_id" "$text" "$chat_id" "$label" 2>&1 || true)"
+;;
+esac
+
+if echo "$result" | grep -q '"ok":true'; then
+store_tg_map "$result" "$chat_id" "$label"
+log "poll GREEN->Telegram ok type=$type_message chat=$chat_id receipt=$receipt"
+delete_notification "$base" "$max_api_token" "$receipt"
+else
+log "poll GREEN->Telegram FAIL type=$type_message chat=$chat_id receipt=$receipt result=$(printf '%s' "$result" | tr '\n' ' ' | cut -c1-220)"
+fi
+}
+
+log "polling started"
+
+while true; do
+load_tmb_config
+
+poll_enabled="$(uci -q get telegram_max_bridge.main.poll_enabled 2>/dev/null || echo 1)"
+poll_interval="$(uci -q get telegram_max_bridge.main.poll_interval 2>/dev/null || echo 3)"
+
+if [ "$enabled" != "1" ] || [ "$poll_enabled" != "1" ]; then
+sleep "$poll_interval"
+continue
+fi
+
+if [ -z "$max_instance_id" ] || [ -z "$max_api_token" ] || [ -z "$telegram_bot_token" ] || [ -z "$telegram_channel_id" ]; then
+log "poll skipped: config incomplete"
+sleep "$poll_interval"
+continue
+fi
+
+tg_init_offset
+
+base="$(green_base_url)"
+resp="$(uclient-fetch -q -T 25 -O - "${base}/receiveNotification/${max_api_token}?receiveTimeout=5" 2>/dev/null || true)"
+[ -n "$resp" ] && [ "$resp" != "null" ] && process_notification "$resp"
+
+tg_resp="$(tg_get_updates)"
+[ -n "$tg_resp" ] && process_telegram_update "$tg_resp"
+
+sleep "$poll_interval"
+done

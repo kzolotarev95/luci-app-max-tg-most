@@ -1,0 +1,55 @@
+#!/bin/sh
+
+main_count() {
+  C=0
+  for P in $(ps w | awk '/\/usr\/bin\/telegram-max-bridge-poll/ && !/awk/ {print $1}'); do
+    PP="$(awk '/^PPid:/ {print $2}' /proc/$P/status 2>/dev/null)"
+    [ "$PP" = "1" ] && C=$((C+1))
+  done
+  echo "$C"
+}
+
+status_out() {
+  enabled="$(uci -q get telegram_max_bridge.main.enabled 2>/dev/null || echo 0)"
+  poll_enabled="$(uci -q get telegram_max_bridge.main.poll_enabled 2>/dev/null || echo 0)"
+  main="$(main_count)"
+
+  green_state="unknown"
+  if [ -f /usr/lib/telegram-max-bridge/common.sh ]; then
+    . /usr/lib/telegram-max-bridge/common.sh
+    load_tmb_config 2>/dev/null || true
+    BASE="$(green_base_url 2>/dev/null || true)"
+    if [ -n "$BASE" ] && [ -n "$max_api_token" ]; then
+      green_state="$(curl -sS -m 8 "${BASE}/getStateInstance/${max_api_token}" 2>/dev/null | jsonfilter -e '@.stateInstance' 2>/dev/null | head -1)"
+      [ -n "$green_state" ] || green_state="unknown"
+    fi
+  fi
+
+  if [ "$enabled" = "1" ] && [ "$poll_enabled" = "1" ] && [ "$main" = "1" ] && [ "$green_state" = "authorized" ]; then
+    st="ONLINE"
+  else
+    st="OFFLINE"
+  fi
+
+  echo "status=$st"
+  echo "enabled=$enabled"
+  echo "poll_enabled=$poll_enabled"
+  echo "main_polling=$main"
+  echo "green_state=$green_state"
+  echo "time=$(date '+%Y-%m-%d %H:%M:%S')"
+}
+
+restart_poll() {
+  /etc/init.d/telegram-max-bridge-poll stop 2>/dev/null || true
+  ps w | awk '/\/usr\/bin\/telegram-max-bridge-poll/ && !/awk/ {print $1}' | while read P; do kill -9 "$P" 2>/dev/null || true; done
+  rm -f /tmp/telegram-max-bridge-poll.lock /var/run/telegram-max-bridge-poll.pid
+  /etc/init.d/telegram-max-bridge-poll start 2>/dev/null || true
+  sleep 2
+  status_out
+}
+
+case "${1:-status}" in
+  status) status_out ;;
+  restart) restart_poll ;;
+  *) echo "Usage: $0 status|restart"; exit 1 ;;
+esac

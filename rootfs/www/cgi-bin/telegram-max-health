@@ -1,0 +1,8 @@
+#!/bin/sh
+. /usr/lib/telegram-max-bridge/common.sh
+load_tmb_config
+cgi_json_header '200 OK'
+printf '{"status":"ok","version":"%s","enabled":"%s","direction":"%s","green_configured":%s,"telegram_configured":%s}\n' \
+	"$TMB_VERSION" "$enabled" "$direction" \
+	"$([ -n "$max_instance_id" ] && [ -n "$max_api_token" ] && echo true || echo false)" \
+	"$([ -n "$telegram_bot_token" ] && echo true || echo false)"

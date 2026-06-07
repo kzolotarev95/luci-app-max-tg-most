@@ -1,0 +1,13 @@
+
+config bridge 'main'
+	option enabled '0'
+	option direction 'max_to_telegram'
+	option prefix_sender '1'
+	option log_level 'info'
+	option telegram_bot_token ''
+	option telegram_channel_id ''
+	option max_instance_id ''
+	option max_api_token ''
+	option poll_enabled '0'
+	option poll_interval '3'
+

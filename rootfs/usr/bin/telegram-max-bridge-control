@@ -1,0 +1,129 @@
+#!/bin/sh
+. /usr/lib/telegram-max-bridge/common.sh
+load_tmb_config
+
+usage() {
+cat <<USAGE
+Мост Telegram MAX
+
+Команды:
+  status                   Показать состояние моста
+  health                   Проверить локальный health-check
+  urls                     Показать webhook-адреса
+  logs [N]                 Показать последние N строк лога
+  enable                   Включить мост
+  disable                  Выключить мост
+  restart-uhttpd           Перезапустить веб-интерфейс OpenWrt
+  set-telegram-webhook     Установить Telegram webhook
+  delete-telegram-webhook  Удалить Telegram webhook
+  green-chats              Получить список чатов GREEN-API
+  test-telegram TEXT       Отправить тестовое сообщение в Telegram
+  test-max TEXT            Отправить тестовое сообщение в MAX
+USAGE
+}
+
+local_base_url() {
+lan_ip="$(uci -q get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1)"
+printf 'http://%s' "$lan_ip"
+}
+
+case "${1:-}" in
+status)
+printf 'Мост Telegram MAX: %s\n' "$([ "$enabled" = 1 ] && echo ВКЛЮЧЕН || echo ВЫКЛЮЧЕН)"
+printf 'Версия: %s\n' "$TMB_VERSION"
+case "$direction" in
+max_to_telegram) dir_ru='MAX → Telegram' ;;
+telegram_to_max) dir_ru='Telegram → MAX' ;;
+*) dir_ru="$direction" ;;
+esac
+printf 'Направление: %s\n' "$dir_ru"
+
+printf '\nСвободное место overlay:\n'
+df -h /overlay 2>/dev/null || df -h /
+
+printf '\nНужные утилиты:\n'
+for b in uhttpd uclient-fetch jsonfilter uci logger; do
+command -v "$b" >/dev/null 2>&1 && echo "OK $b" || echo "НЕТ $b"
+done
+
+printf '\nCGI-файлы:\n'
+for f in /www/cgi-bin/telegram-max-green /www/cgi-bin/telegram-max-telegram /www/cgi-bin/telegram-max-health; do
+[ -x "$f" ] && echo "OK $f" || echo "НЕТ $f"
+done
+;;
+health)
+base="$(local_base_url)"
+uclient-fetch -q -T 10 -O - "${base}/cgi-bin/telegram-max-health" 2>&1
+;;
+urls)
+base="$(local_base_url)"
+cat <<URLS
+Локальный health-check:
+  ${base}/cgi-bin/telegram-max-health
+
+Webhook для GREEN-API / MAX → Telegram:
+  http://ТВОЙ_ВНЕШНИЙ_IP_ИЛИ_ДОМЕН/cgi-bin/telegram-max-green
+
+Webhook для Telegram / Telegram → MAX:
+  https://ТВОЙ_ДОМЕН/cgi-bin/telegram-max-telegram
+URLS
+;;
+logs)
+n="${2:-120}"
+logread -e telegram-max-bridge | tail -n "$n"
+;;
+enable)
+uci set telegram_max_bridge.main.enabled='1'
+uci commit telegram_max_bridge
+echo 'Мост включён'
+;;
+disable)
+uci set telegram_max_bridge.main.enabled='0'
+uci commit telegram_max_bridge
+echo 'Мост выключен'
+;;
+restart|restart-uhttpd)
+rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache* /tmp/luci-*.json 2>/dev/null
+/etc/init.d/rpcd restart 2>/dev/null || true
+/etc/init.d/uhttpd restart 2>/dev/null || true
+echo 'Веб-интерфейс OpenWrt перезапущен'
+;;
+set-telegram-webhook)
+[ -n "$telegram_bot_token" ] || { echo 'ОШИБКА: токен Telegram-бота не указан'; exit 1; }
+[ -n "$telegram_webhook_url" ] || { echo 'ОШИБКА: Webhook URL для Telegram не указан'; exit 1; }
+
+url_e="$(printf '%s' "$telegram_webhook_url" | json_escape)"
+secret_e="$(printf '%s' "$telegram_webhook_secret" | json_escape)"
+
+if [ -n "$telegram_webhook_secret" ]; then
+payload="{\"url\":\"${url_e}\",\"secret_token\":\"${secret_e}\",\"drop_pending_updates\":true}"
+else
+payload="{\"url\":\"${url_e}\",\"drop_pending_updates\":true}"
+fi
+
+telegram_api 'setWebhook' "$payload"
+;;
+delete-telegram-webhook)
+[ -n "$telegram_bot_token" ] || { echo 'ОШИБКА: токен Telegram-бота не указан'; exit 1; }
+telegram_api 'deleteWebhook' '{"drop_pending_updates":true}'
+;;
+green-chats)
+[ -n "$max_instance_id" ] || { echo 'ОШИБКА: GREEN-API Instance ID не указан'; exit 1; }
+[ -n "$max_api_token" ] || { echo 'ОШИБКА: GREEN-API API Token не указан'; exit 1; }
+base="$(green_base_url)"
+uclient-fetch -q -T 25 -O - "${base}/getChats/${max_api_token}" 2>&1
+;;
+test-telegram)
+shift
+text="${*:-Тестовое сообщение из OpenWrt / Мост Telegram MAX}"
+send_telegram_text "$telegram_channel_id" "$text"
+;;
+test-max)
+shift
+text="${*:-Тестовое сообщение из OpenWrt / Мост Telegram MAX}"
+send_green_text "$max_target_chat_id" "$text"
+;;
+*)
+usage
+;;
+esac
