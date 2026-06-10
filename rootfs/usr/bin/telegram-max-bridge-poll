@@ -15,9 +15,11 @@ TG_MAP_FILE="/tmp/telegram-max-bridge-msg-map"
 TG_LAST_CHAT_FILE="/tmp/telegram-max-bridge-last-chat"
 TG_ACTIVE_CHAT_FILE="/tmp/telegram-max-bridge-active-chat"
 TG_CHATS_FILE="/tmp/telegram-max-bridge-chats"
+TMB_MUTED_CHATS_FILE="/etc/telegram-max-bridge-muted-chats" # TMB_MUTE_GROUPS_V36_FILE
 
 log(){ logger -t telegram-max-bridge-poll "$*"; }
 json_get(){ jsonfilter -s "$1" -e "$2" 2>/dev/null | head -n 1; }
+json_get_text(){ jsonfilter -s "$1" -e "$2" 2>/dev/null; } # TMB_FULL_MULTILINE_TEXT_V40_FUNC
 
 tg_api_raw() {
 method="$1"
@@ -333,7 +335,14 @@ receipt="$(json_get "$resp" '@.receiptId')"
 
 type_webhook="$(json_get "$resp" '@.body.typeWebhook')"
 chat_id="$(json_get "$resp" '@.body.senderData.chatId')"
+mute_groups_enabled="$(uci -q get telegram_max_bridge.main.mute_groups_enabled 2>/dev/null || echo 0)" # TMB_MUTE_GROUPS_V36_BEGIN TMB_MUTE_GROUPS_V36C_NEGATIVE_ID_FIX
+if [ "$mute_groups_enabled" = "1" ] && [ -n "$chat_id" ] && [ -f "$TMB_MUTED_CHATS_FILE" ] && grep -qxF -e "$chat_id" "$TMB_MUTED_CHATS_FILE"; then
+  log "poll GREEN->Telegram skipped muted chat=$chat_id"
+  [ -n "$receipt" ] && { curl -sS -m 15 -X DELETE "${base}/deleteNotification/${max_api_token}/${receipt}" >/dev/null 2>&1 || uclient-fetch -q -T 15 -O - "${base}/deleteNotification/${max_api_token}/${receipt}" >/dev/null 2>&1 || true; }
+  return 0
+fi # TMB_MUTE_GROUPS_V36_END
 sender_name="$(json_get "$resp" '@.body.senderData.senderName')"
+chat_name="$(json_get "$resp" '@.body.senderData.chatName')" # TMB_GROUP_CHATNAME_V41
 type_message="$(json_get "$resp" '@.body.messageData.typeMessage')"
 
 if [ "$type_webhook" != "incomingMessageReceived" ]; then
@@ -341,20 +350,20 @@ delete_notification "$base" "$max_api_token" "$receipt"
 return 0
 fi
 
-label="$sender_name"
+label="${chat_name:-$sender_name}" # TMB_GROUP_CHATNAME_V41_LABEL
 [ -n "$label" ] || label="$chat_id"
 
 file_url="$(json_get "$resp" '@.body.messageData.fileMessageData.downloadUrl')"
 file_name="$(json_get "$resp" '@.body.messageData.fileMessageData.fileName')"
-caption="$(json_get "$resp" '@.body.messageData.fileMessageData.caption')"
+caption="$(json_get_text "$resp" '@.body.messageData.fileMessageData.caption')" # TMB_FULL_MULTILINE_TEXT_V40
 
 prefix=""
 [ "$prefix_sender" = "1" ] && { [ -n "$sender_name" ] && prefix="👤 ${sender_name}" || prefix="👤 MAX"; }
 
 case "$type_message" in
 textMessage|extendedTextMessage)
-text="$(json_get "$resp" '@.body.messageData.textMessageData.textMessage')"
-[ -n "$text" ] || text="$(json_get "$resp" '@.body.messageData.extendedTextMessageData.text')"
+text="$(json_get_text "$resp" '@.body.messageData.textMessageData.textMessage')" # TMB_FULL_MULTILINE_TEXT_V40
+[ -n "$text" ] || text="$(json_get_text "$resp" '@.body.messageData.extendedTextMessageData.text')" # TMB_FULL_MULTILINE_TEXT_V40
 [ -n "$text" ] || text="Пустое сообщение MAX"
 [ -n "$prefix" ] && text="${prefix}
 ${text}"

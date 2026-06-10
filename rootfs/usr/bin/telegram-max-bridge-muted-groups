@@ -1,0 +1,52 @@
+#!/bin/sh
+# TMB_GROUP_NAMES_V36F_HELPER_ALIAS_OK
+CONF="/etc/telegram-max-bridge-muted-chats"
+CHATS="/tmp/telegram-max-bridge-chats"
+NAMES="/etc/telegram-max-bridge-chat-names"
+
+enabled="$(uci -q get telegram_max_bridge.main.mute_groups_enabled 2>/dev/null || echo 0)"
+
+is_muted() {
+  [ -f "$CONF" ] && grep -qxF -e "$1" "$CONF"
+}
+
+alias_name() {
+  [ -f "$NAMES" ] && awk -F'|' -v id="$1" '$1==id{print $2; exit}' "$NAMES"
+}
+
+case "$1" in
+  status|"")
+    echo "enabled=$enabled"
+    {
+      [ -f "$CHATS" ] && cat "$CHATS"
+      [ -f "$CONF" ] && while read -r id; do [ -n "$id" ] && echo "$id|$id"; done < "$CONF"
+      [ -f "$NAMES" ] && cat "$NAMES"
+    } | awk -F'|' 'NF && !seen[$1]++ {print $1 "|" ($2 ? $2 : $1)}' | while IFS='|' read -r id name; do
+      muted=0
+      is_muted "$id" && muted=1
+      a="$(alias_name "$id")"
+      echo "CHAT|$id|${a:-${name:-$id}}|$muted"
+    done
+  ;;
+  set)
+    en="${2:-0}"
+    ids="${3:-}"
+    uci set telegram_max_bridge.main.mute_groups_enabled="$en"
+    uci commit telegram_max_bridge
+    : > "$CONF"
+    printf '%s' "$ids" | tr ',' '\n' | sed '/^$/d' | sort -u > "$CONF"
+    echo "OK"
+  ;;
+  all)
+    uci set telegram_max_bridge.main.mute_groups_enabled='1'
+    uci commit telegram_max_bridge
+    [ -f "$CHATS" ] && awk -F'|' 'NF{print $1}' "$CHATS" | sort -u > "$CONF" || : > "$CONF"
+    echo "OK"
+  ;;
+  clear)
+    uci set telegram_max_bridge.main.mute_groups_enabled='0'
+    uci commit telegram_max_bridge
+    : > "$CONF"
+    echo "OK"
+  ;;
+esac

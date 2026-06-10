@@ -1,4 +1,6 @@
 'use strict';
+/* TMB_REMOVE_POLL_STATUS_BLOCK_V45 */
+/* TMB_REMOVE_BACKUP_BLOCK_V43 */
 'require view';
 'require form';
 'require fs';
@@ -1116,7 +1118,89 @@ window.setInterval(tmbBotControlFontV24, 700);
 window.setTimeout(tmbBotControlFontV24, 200);
 // TMB_BOT_CONTROL_FONT_V24_END
 
-			var root = E('div', {}, [ topManualCard, botControlCardV12, greenMiniStatusBlock, quotaMiniStatusBlock, pollStatusCard, logsBox,testTelegramCard, settingsCard, backupCard ]);
+// TMB_MUTE_GROUPS_V36_JS_BEGIN
+var muteGroupsBodyV36 = E('div', { 'style': 'margin-top:10px' }, _('Загрузка списка MAX-чатов...'));
+
+function tmbMuteGroupsRefreshV36() {
+  return fs.exec('/usr/bin/telegram-max-bridge-muted-groups', ['status']).then(function(res) {
+    var txt = res.stdout || '';
+    var enabled = /^enabled=1/m.test(txt);
+    var chats = [];
+
+    txt.split(/\n/).forEach(function(line) {
+      if (line.indexOf('CHAT|') !== 0) return;
+      var p = line.split('|');
+      chats.push({ id: p[1] || '', name: p[2] || p[1] || '', muted: p[3] === '1' });
+    });
+
+    muteGroupsBodyV36.innerHTML = '';
+
+    var enableCb = E('input', { 'type': 'checkbox' });
+    enableCb.checked = enabled;
+
+    var list = E('div', { 'style': 'display:grid;gap:8px;margin:10px 0' });
+
+    if (!chats.length) {
+      list.appendChild(E('div', { 'class': 'cbi-value-description' }, _('Пока список пуст. Напиши сообщение из нужной MAX-группы/чата — он появится здесь.')));
+    }
+
+    chats.forEach(function(c) {
+      var cb = E('input', { 'type': 'checkbox', 'data-chat-id': c.id });
+      cb.checked = c.muted;
+      list.appendChild(E('label', { 'style': 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, [
+        cb,
+        E('b', {}, c.name),
+        E('span', { 'style': 'opacity:.65' }, c.id)
+      ]));
+    });
+
+    var saveBtn = E('button', { 'class': 'btn cbi-button cbi-button-apply' }, _('Сохранить mute'));
+    saveBtn.addEventListener('click', function() {
+      var ids = [];
+      list.querySelectorAll('input[data-chat-id]').forEach(function(cb) {
+        if (cb.checked) ids.push(cb.getAttribute('data-chat-id'));
+      });
+      return fs.exec('/usr/bin/telegram-max-bridge-muted-groups', ['set', enableCb.checked ? '1' : '0', ids.join(',')]).then(function() {
+        ui.addNotification(null, E('p', {}, _('Mute-группы сохранены')), 'info');
+        return tmbMuteGroupsRefreshV36();
+      });
+    });
+
+    var allBtn = E('button', { 'class': 'btn cbi-button' }, _('Заглушить все найденные группы'));
+    allBtn.addEventListener('click', function() {
+      return fs.exec('/usr/bin/telegram-max-bridge-muted-groups', ['all']).then(tmbMuteGroupsRefreshV36);
+    });
+
+    var clearBtn = E('button', { 'class': 'btn cbi-button cbi-button-reset' }, _('Очистить список'));
+    clearBtn.addEventListener('click', function() {
+      return fs.exec('/usr/bin/telegram-max-bridge-muted-groups', ['clear']).then(tmbMuteGroupsRefreshV36);
+    });
+
+    muteGroupsBodyV36.appendChild(E('label', { 'style': 'display:flex;gap:8px;align-items:center;font-weight:700' }, [
+      enableCb,
+      _('Глушить группы без звука')
+    ]));
+    muteGroupsBodyV36.appendChild(E('div', { 'class': 'cbi-value-description', 'style': 'margin:6px 0 10px 0' },
+      _('GREEN-API не отдаёт признак mute/silent, поэтому здесь выбираются группы/чаты, которые не нужно пересылать в Telegram.')));
+    muteGroupsBodyV36.appendChild(list);
+    muteGroupsBodyV36.appendChild(E('div', { 'style': 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' }, [ saveBtn, allBtn, clearBtn ]));
+  }).catch(function(e) {
+    muteGroupsBodyV36.textContent = 'Ошибка mute-групп: ' + e;
+  });
+}
+
+var muteGroupsCardV36 = E('div', {
+  'class': 'cbi-section',
+  'style': 'padding:18px;margin-top:14px;margin-bottom:14px;border-radius:14px;border:1px solid rgba(127,127,127,.35);background:rgba(127,127,127,.07)'
+}, [
+  E('h3', { 'style': 'margin-top:0' }, _('Группы без звука MAX → Telegram')),
+  E('p', { 'style': 'opacity:.75;margin-bottom:10px' }, _('Отмеченные MAX-чаты не будут отправляться в Telegram. Остальные чаты продолжают приходить.')),
+  muteGroupsBodyV36
+]);
+
+window.setTimeout(tmbMuteGroupsRefreshV36, 300);
+// TMB_MUTE_GROUPS_V36_JS_END
+			var root = E('div', {}, [ topManualCard, botControlCardV12, greenMiniStatusBlock, quotaMiniStatusBlock, muteGroupsCardV36, logsBox,testTelegramCard, settingsCard ]);
 			// TMB_HIDE_PAGE_H2_V1
 			window.setTimeout(function() {
 				var h = document.querySelector('h2[name="content"]');
@@ -1136,6 +1220,60 @@ window.setTimeout(tmbBotControlFontV24, 200);
 				if (window.tmbLiveLogsTimerV1) window.clearInterval(window.tmbLiveLogsTimerV1);
 				window.tmbLiveLogsTimerV1 = window.setInterval(upd, 2000);
 			}, 0);
+// TMB_MUTE_GROUPS_COLLAPSE_V44
+setTimeout(function() {
+try {
+var hs = document.querySelectorAll('.cbi-section h3');
+for (var i = 0; i < hs.length; i++) {
+var h = hs[i];
+if ((h.textContent || '').trim() !== 'Группы без звука MAX → Telegram')
+continue;
+
+var sec = h.closest('.cbi-section');
+if (!sec || sec.getAttribute('data-tmb-mute-collapse-v44') === '1')
+continue;
+
+sec.setAttribute('data-tmb-mute-collapse-v44', '1');
+
+var desc = h.nextElementSibling && h.nextElementSibling.tagName === 'P' ? h.nextElementSibling : null;
+var body = document.createElement('div');
+body.style.cssText = 'display:none;margin-top:12px;font-size:13px;line-height:1.45;';
+
+var nodes = Array.prototype.slice.call(sec.childNodes);
+nodes.forEach(function(n) {
+if (n !== h && n !== desc)
+body.appendChild(n);
+});
+
+var titleBox = document.createElement('div');
+titleBox.style.cssText = 'font-size:13px;line-height:1.45;';
+h.style.margin = '0 0 4px 0';
+titleBox.appendChild(h);
+if (desc)
+titleBox.appendChild(desc);
+
+var btn = document.createElement('button');
+btn.className = 'btn cbi-button cbi-button-action';
+btn.textContent = 'Открыть';
+btn.style.cssText = 'font-weight:700;border-radius:10px;min-width:110px;padding:9px 16px';
+
+var head = document.createElement('div');
+head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:13px;line-height:1.45;';
+head.appendChild(titleBox);
+head.appendChild(btn);
+
+btn.onclick = function() {
+var open = body.style.display === 'none';
+body.style.display = open ? 'block' : 'none';
+btn.textContent = open ? 'Скрыть' : 'Открыть';
+};
+
+sec.innerHTML = '';
+sec.appendChild(head);
+sec.appendChild(body);
+}
+} catch (e) {}
+}, 0);
 			return root;
 });
 }
