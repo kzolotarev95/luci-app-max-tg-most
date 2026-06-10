@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🚀 LuCI App MAX ↔ Telegram Bridge
+#  LuCI App MAX  Telegram Bridge
 
 ### Мост сообщений между **MAX** и **Telegram** для OpenWrt
 
@@ -17,18 +17,19 @@
 
 <br>
 
-**MAX ↔ Telegram bridge for OpenWrt with LuCI web interface**
+**MAX  Telegram bridge for OpenWrt with LuCI web interface**
 
 </div>
 
 ---
 
-<img width="790" height="918" alt="chrome_VGwtfykEdq" src="https://github.com/user-attachments/assets/2ff395fd-8a7d-488a-90ed-7a2f2216ec9c" />
+<img width="1920" height="1689" alt="11111111111111111111111111111111122222222222222222" src="https://github.com/user-attachments/assets/dad7c198-5add-4ae9-af55-de60d5a85067" />
 
 
-## 📌 Описание
 
-**LuCI App MAX ↔ Telegram Bridge** — это модуль для OpenWrt, который позволяет пересылать сообщения между **MAX** и **Telegram** прямо с роутера.
+##  Описание
+
+**LuCI App MAX  Telegram Bridge** — это модуль для OpenWrt, который позволяет пересылать сообщения между **MAX** и **Telegram** прямо с роутера.
 
 Модуль использует:
 
@@ -39,13 +40,13 @@
 
 ---
 
-## ✅ Возможности
+##  Возможности
 
-- ✅ MAX → Telegram
-- ✅ Telegram → MAX
-- ✅ Текстовые сообщения
-- ✅ Фото
-- ✅ Видео
+-  MAX → Telegram
+-  Telegram → MAX
+-  Текстовые сообщения
+-  Фото
+-  Видео
 - ✅ Файлы
 - ✅ Работа без белого IP
 - ✅ Работа через polling
