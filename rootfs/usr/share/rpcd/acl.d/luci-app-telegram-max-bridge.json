@@ -24,6 +24,7 @@
         "/usr/bin/telegram-max-bridge-quota-status": [
           "exec"
         ],
+        "/usr/bin/telegram-max-bridge-muted-groups": [ "exec" ],
         "/usr/bin/telegram-max-bridge-bot-control": [
           "exec"
         ]
@@ -52,6 +53,7 @@
         "/usr/bin/telegram-max-bridge-quota-status": [
           "exec"
         ],
+        "/usr/bin/telegram-max-bridge-muted-groups": [ "exec" ],
         "/usr/bin/telegram-max-bridge-bot-control": [
           "exec"
         ]
