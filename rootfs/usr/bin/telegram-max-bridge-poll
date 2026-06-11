@@ -42,20 +42,20 @@ text_e="$(printf '%s' "$text" | json_escape)"
 tg_api_raw "answerCallbackQuery" "{\"callback_query_id\":\"${cbid_e}\",\"text\":\"${text_e}\",\"show_alert\":false}" >/dev/null 2>&1 || true
 }
 
-tg_send_text_buttons() {
+tg_send_text_buttons() { # TMB_NO_INLINE_BUTTONS_FULLTEXT_V56
 chat="$1"
 text="$2"
-max_chat="$3"
-label="$4"
-
-chat_e="$(printf '%s' "$chat" | json_escape)"
-text_e="$(printf '%s' "$text" | json_escape)"
-max_e="$(printf '%s' "$max_chat" | json_escape)"
-label_e="$(printf '%s' "$label" | json_escape)"
-
-tg_api_raw "sendMessage" "{\"chat_id\":\"${chat_e}\",\"text\":\"${text_e}\",\"disable_web_page_preview\":false,\"reply_markup\":{\"inline_keyboard\":[[{\"text\":\"✍️ Ответить: ${label_e}\",\"callback_data\":\"reply:${max_e}\"}],[{\"text\":\"📋 Последние чаты\",\"callback_data\":\"chats\"}]]}}"
+tmpmsg="/tmp/tmb-fulltext-$$.txt"
+printf '%s' "$text" > "$tmpmsg"
+if command -v curl >/dev/null 2>&1; then
+  curl -sS -m 25 -X POST "https://api.telegram.org/bot${telegram_bot_token}/sendMessage" --data-urlencode "chat_id=$chat" --data-urlencode "text@$tmpmsg" --data-urlencode "disable_web_page_preview=false"
+else
+  chat_e="$(printf '%s' "$chat" | json_escape)"
+  text_e="$(printf '%s' "$text" | json_escape)"
+  tg_api_raw "sendMessage" "{\"chat_id\":\"${chat_e}\",\"text\":\"${text_e}\",\"disable_web_page_preview\":false}"
+fi
+rm -f "$tmpmsg"
 }
-
 tg_send_media_buttons() {
 method="$1"
 field="$2"
